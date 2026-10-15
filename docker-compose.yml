@@ -1,0 +1,17 @@
+name: arenaplayteambot
+
+services:
+  backend:
+    build: .
+    image: arenaplayteambot
+    container_name: arenaplayteambot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "1"

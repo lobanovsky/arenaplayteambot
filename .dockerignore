@@ -1,0 +1,10 @@
+.git
+.github
+.idea
+.env
+.env.*
+data
+server
+*.rollback
+*.deploy
+private/

@@ -1,0 +1,192 @@
+name: Backend CI/CD
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: arenaplayteambot
+
+jobs:
+  test:
+    name: Test and build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: Build
+        run: go build ./cmd/server
+
+  publish:
+    name: Build and publish image
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.image.outputs.tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set image tag
+        id: image
+        run: echo "tag=sha-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.image.outputs.tag }}
+            ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to Ubuntu server
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: publish
+    runs-on: ubuntu-latest
+    concurrency:
+      group: arenaplayteambot-production
+      cancel-in-progress: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Prepare deployment files
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          TAG: ${{ needs.publish.outputs.tag }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_RELAY_URL: ${{ secrets.TELEGRAM_RELAY_URL }}
+          TELEGRAM_RELAY_API_KEY: ${{ secrets.TELEGRAM_RELAY_API_KEY }}
+          CHECK_TIMES: ${{ secrets.CHECK_TIMES }}
+          REQUEST_TIMEOUT: ${{ secrets.REQUEST_TIMEOUT }}
+        run: |
+          python3 - <<'PYENV'
+          import os
+          from pathlib import Path
+          required = ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "TELEGRAM_RELAY_URL", "TELEGRAM_RELAY_API_KEY"]
+          values = {key: os.environ[key] for key in required}
+          if any(not value for value in values.values()):
+              raise SystemExit("Missing required Telegram secrets")
+          values.update(CHECK_TIMES=os.environ.get("CHECK_TIMES") or "07:00,13:00,19:00",
+                        REQUEST_TIMEOUT=os.environ.get("REQUEST_TIMEOUT") or "25s",
+                        TZ="Europe/Moscow", STATE_FILE="/data/state.json", LISTEN_ADDR=":8080")
+          if any(any(char in value for char in "\n\r'") for value in values.values()):
+              raise SystemExit("Unsupported character in configuration")
+          # Одинарные кавычки защищают секреты от интерполяции Compose.
+          Path(".env.deploy").write_text("".join(f"{key}='{value}'\n" for key, value in values.items()))
+          Path(".env.deploy").chmod(0o600)
+          image = os.environ["DOCKER_USERNAME"] + "/arenaplayteambot:" + os.environ["TAG"]
+          Path("docker-compose.yml.deploy").write_text(Path("docker-compose.yml").read_text().replace("image: arenaplayteambot", "image: " + image))
+          PYENV
+
+      - name: Copy deployment files
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST_IP }}
+          username: ${{ secrets.DEPLOY_HOST_USERNAME }}
+          port: ${{ secrets.DEPLOY_HOST_PORT }}
+          key: ${{ secrets.DEPLOY_HOST_KEY }}
+          source: ".env.deploy,docker-compose.yml.deploy"
+          target: ${{ secrets.DEPLOY_HOST_PROJECT_PATH }}
+
+      - name: Deploy and verify
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ secrets.DEPLOY_HOST_IP }}
+          username: ${{ secrets.DEPLOY_HOST_USERNAME }}
+          port: ${{ secrets.DEPLOY_HOST_PORT }}
+          key: ${{ secrets.DEPLOY_HOST_KEY }}
+          script: |
+            set -eu
+            cd "${{ secrets.DEPLOY_HOST_PROJECT_PATH }}"
+            echo "${{ secrets.DOCKER_TOKEN }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+            mkdir -p data
+            chmod 700 data
+            chmod 600 .env.deploy
+
+            had_previous=false
+            if [ -f .env ] && [ -f docker-compose.yml ]; then
+              cp .env .env.rollback
+              cp docker-compose.yml docker-compose.yml.rollback
+              had_previous=true
+            fi
+
+            mv .env.deploy .env
+            mv docker-compose.yml.deploy docker-compose.yml
+
+            deployment_ok=false
+            expected_image="${{ secrets.DOCKER_USERNAME }}/arenaplayteambot:${{ needs.publish.outputs.tag }}"
+            if docker compose pull backend && docker compose up -d backend; then
+              attempt=1
+              while [ "$attempt" -le 30 ]; do
+                running_image=$(docker inspect --format '{{.Config.Image}}' arenaplayteambot 2>/dev/null || true)
+                if [ "$running_image" = "$expected_image" ] && \
+                   docker compose exec -T backend wget -q -O- http://127.0.0.1:8080/healthz 2>/dev/null | grep -q '"status":"ok"'; then
+                  deployment_ok=true
+                  break
+                fi
+                sleep 2
+                attempt=$((attempt + 1))
+              done
+            fi
+
+            if [ "$deployment_ok" = true ]; then
+              rm -f .env.rollback docker-compose.yml.rollback
+              exit 0
+            fi
+
+            echo "Deployment health check failed; restoring previous version"
+            echo "Expected image: $expected_image"
+            echo "Container state:"
+            docker compose ps
+            docker compose logs --tail 20 backend || true
+            if [ "$had_previous" = true ]; then
+              mv .env.rollback .env
+              mv docker-compose.yml.rollback docker-compose.yml
+              docker compose pull backend
+              docker compose up -d backend
+            else
+              docker compose down
+            fi
+            exit 1

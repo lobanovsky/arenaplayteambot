@@ -1,0 +1,10 @@
+.idea/
+.env
+.env.*
+!.env.example
+data/
+server
+coverage.out
+*.rollback
+*.deploy
+private/
