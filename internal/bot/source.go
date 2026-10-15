@@ -19,6 +19,7 @@ import (
 
 const ClubURL = "https://lhl-77.ru/clubs/686"
 const VideoCatalog = "https://vkvideo.ru/@lhl_77/all"
+const TeamScheduleURL = "https://arenaplayteam.ru/data/schedule.json"
 
 type Game struct {
 	ID         string    `json:"id"`
@@ -31,6 +32,7 @@ type Game struct {
 type Video struct {
 	Title, URL string
 	Date       time.Time
+	ExactDate  bool
 }
 type Source interface {
 	Games(context.Context) ([]Game, error)
@@ -87,6 +89,16 @@ func (s *WebSource) Games(ctx context.Context) ([]Game, error) {
 func (s *WebSource) Videos(ctx context.Context) ([]Video, error) {
 	var out []Video
 	var last error
+	// Сайт сохраняет найденные ссылки, даже если VK больше не показывает их в каталоге.
+	if page, err := s.fetch(ctx, TeamScheduleURL); err == nil {
+		if videos, err := ParseTeamVideos(page); err == nil {
+			out = append(out, videos...)
+		} else {
+			last = err
+		}
+	} else {
+		last = err
+	}
 	for _, url := range []string{VideoCatalog, "https://vkvideo.ru/videos-71330880"} {
 		page, err := s.fetch(ctx, url)
 		if err != nil {
@@ -107,6 +119,30 @@ func (s *WebSource) Videos(ctx context.Context) ([]Video, error) {
 		return nil, last
 	}
 	return out, nil
+}
+
+func ParseTeamVideos(page string) ([]Video, error) {
+	type entry struct {
+		Opponent string `json:"opponent"`
+		Date     string `json:"dateISO"`
+		URL      string `json:"videoUrl"`
+	}
+	var schedule struct {
+		Next    entry   `json:"nextGame"`
+		Results []entry `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(page), &schedule); err != nil {
+		return nil, fmt.Errorf("invalid team schedule: %w", err)
+	}
+	var videos []Video
+	for _, game := range append(schedule.Results, schedule.Next) {
+		date, err := time.Parse("2006-01-02", game.Date)
+		if err != nil || strings.TrimSpace(game.Opponent) == "" || !videoURLRE.MatchString(game.URL) {
+			continue
+		}
+		videos = append(videos, Video{Title: "Arena Play " + game.Opponent, URL: game.URL, Date: date, ExactDate: true})
+	}
+	return videos, nil
 }
 func nodeText(n *html.Node) string {
 	var b strings.Builder
@@ -377,6 +413,9 @@ func FindVideo(g Game, videos []Video) string {
 			continue
 		}
 		delta := int(v.Date.Sub(day).Hours() / 24)
+		if v.ExactDate && delta != 0 {
+			continue
+		}
 		if delta < -3 || delta > 1 {
 			continue
 		}

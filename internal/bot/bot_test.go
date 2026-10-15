@@ -175,6 +175,43 @@ func TestNewGameIncludesAvailableVideo(t *testing.T) {
 		t.Fatal("duplicate video announcement")
 	}
 }
+
+func TestTeamVideoWhenVKOmitsMatch(t *testing.T) {
+	page := `{"nextGame":{"dateISO":"2026-10-17","opponent":"Легенда-Старт","videoUrl":"https://vkvideo.ru/video-71330880_456246295"},"results":[{"dateISO":"2026-10-17","opponent":"Легенда-Старт","videoUrl":"https://vkvideo.ru/video-71330880_456246295"},{"dateISO":"2026-10-18","opponent":"Другая команда","videoUrl":"https://vkvideo.ru/@lhl_77/all"}]}`
+	web := NewWebSource(time.Second, moscow())
+	web.Client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body := `<script type="application/ld+json">{"@type":"VideoObject","name":"Другой матч","datePublished":"2026-10-15","contentUrl":"https://vkvideo.ru/video-71330880_1"}</script>`
+		if r.URL.String() == TeamScheduleURL {
+			body = page
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/html; charset=utf-8"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})
+	videos, err := web.Videos(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := sampleGame()
+	g.Opponent = "Легенда-Старт"
+	url := "https://vkvideo.ru/video-71330880_456246295"
+	if got := FindVideo(g, videos); got != url {
+		t.Fatalf("video = %q, want %q", got, url)
+	}
+	moved := g
+	moved.Starts = moved.Starts.AddDate(0, 0, 1)
+	if FindVideo(moved, videos) != "" {
+		t.Fatal("site video matched a different match date")
+	}
+	s, source, sender := setup(t)
+	source.games = []Game{g}
+	now := moment("2026-10-15 19:00")
+	check(t, s, now)
+	source.videos = videos
+	check(t, s, now)
+	check(t, s, now)
+	if len(sender.messages) != 2 || !strings.Contains(sender.messages[1], url) || !strings.Contains(sender.messages[1], "Ссылка на трансляцию матча") {
+		t.Fatal(sender.messages)
+	}
+}
 func TestRetryAndRevalidation(t *testing.T) {
 	s, source, sender := setup(t)
 	source.games = []Game{sampleGame()}
