@@ -3,7 +3,7 @@
 .env.*
 !.env.example
 data/
-server
+/server
 coverage.out
 *.rollback
 *.deploy
