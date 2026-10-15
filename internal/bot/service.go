@@ -27,7 +27,7 @@ func textFor(r *Record, loc *time.Location) string {
 		if !sameSchedule(*r.Sent, g) {
 			header = "🏒 Изменилось расписание игры"
 		} else {
-			header = "📺 Появилась трансляция игры"
+			header = "📺 Ссылка на трансляцию матча"
 		}
 	}
 	body := fmt.Sprintf("%s\n\nArena Play — %s\nКогда: %s МСК\nГде: %s", header, g.Opponent, g.Starts.In(loc).Format("02.01.2006 в 15:04"), g.Arena)

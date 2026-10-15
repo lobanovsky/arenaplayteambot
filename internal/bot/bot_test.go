@@ -121,7 +121,7 @@ func TestLifecycle(t *testing.T) {
 	source.games = []Game{g, old}
 	now := moment("2026-10-15 19:00")
 	check(t, s, now)
-	if len(sender.messages) != 1 || !strings.Contains(sender.messages[0], "Новая игра") {
+	if len(sender.messages) != 1 || !strings.Contains(sender.messages[0], "Новая игра") || strings.Contains(sender.messages[0], "Трансляция:") {
 		t.Fatal(sender.messages)
 	}
 	check(t, s, now)
@@ -148,7 +148,7 @@ func TestLifecycle(t *testing.T) {
 	}
 	source.videos = []Video{{Title: "Легенда vs Arena Play", Date: time.Date(2026, 10, 18, 0, 0, 0, 0, time.UTC), URL: "https://vkvideo.ru/live-71330880_123"}}
 	check(t, s, now)
-	if len(sender.messages) != 3 || !strings.Contains(sender.messages[2], "Появилась трансляция") {
+	if len(sender.messages) != 3 || !strings.Contains(sender.messages[2], "Ссылка на трансляцию матча") || !strings.Contains(sender.messages[2], source.videos[0].URL) {
 		t.Fatal(sender.messages)
 	}
 	check(t, s, now)
@@ -159,6 +159,20 @@ func TestLifecycle(t *testing.T) {
 	check(t, s, now)
 	if len(s.State.Games) != 1 {
 		t.Fatal("erased state")
+	}
+}
+func TestNewGameIncludesAvailableVideo(t *testing.T) {
+	s, source, sender := setup(t)
+	source.games = []Game{sampleGame()}
+	url := "https://vkvideo.ru/live-71330880_123"
+	source.videos = []Video{{Title: "Arena Play Легенда", Date: time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC), URL: url}}
+	check(t, s, moment("2026-10-15 19:00"))
+	if len(sender.messages) != 1 || !strings.Contains(sender.messages[0], "Новая игра") || !strings.Contains(sender.messages[0], "\n\nТрансляция: "+url) {
+		t.Fatal(sender.messages)
+	}
+	check(t, s, moment("2026-10-15 19:01"))
+	if len(sender.messages) != 1 {
+		t.Fatal("duplicate video announcement")
 	}
 }
 func TestRetryAndRevalidation(t *testing.T) {
