@@ -45,9 +45,9 @@ func run() error {
 		}
 		results <- err
 	}()
-	service := &bot.Service{Source: bot.NewWebSource(cfg.Timeout, cfg.Location), Sender: &bot.Relay{Client: &http.Client{Timeout: cfg.Timeout}, URL: cfg.RelayURL, Key: cfg.RelayKey, Token: cfg.Token, ChatID: cfg.ChatID}, State: state, Store: store, Location: cfg.Location}
+	service := &bot.Service{Source: bot.NewWebSource(cfg.Timeout, cfg.Location), Sender: &bot.Relay{Client: &http.Client{Timeout: cfg.Timeout}, URL: cfg.RelayURL, Key: cfg.RelayKey, Token: cfg.Token, ChatID: cfg.ChatID, MessageThreadID: cfg.MessageThreadID}, State: state, Store: store, Location: cfg.Location}
 	go func() { results <- service.Run(ctx, cfg.CheckTimes) }()
-	slog.Info("started", "check_times", cfg.CheckTimes, "timezone", cfg.Location.String())
+	slog.Info("started", "check_times", cfg.CheckTimes, "timezone", cfg.Location.String(), "message_thread_id", cfg.MessageThreadID)
 	var result error
 	completed := false
 	select {

@@ -95,6 +95,7 @@ jobs:
           TAG: ${{ needs.publish.outputs.tag }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_MESSAGE_THREAD_ID: ${{ secrets.TELEGRAM_MESSAGE_THREAD_ID }}
           TELEGRAM_RELAY_URL: ${{ secrets.TELEGRAM_RELAY_URL }}
           TELEGRAM_RELAY_API_KEY: ${{ secrets.TELEGRAM_RELAY_API_KEY }}
           CHECK_TIMES: ${{ secrets.CHECK_TIMES }}
@@ -107,7 +108,8 @@ jobs:
           values = {key: os.environ[key] for key in required}
           if any(not value for value in values.values()):
               raise SystemExit("Missing required Telegram secrets")
-          values.update(CHECK_TIMES=os.environ.get("CHECK_TIMES") or "07:00,13:00,19:00",
+          values.update(TELEGRAM_MESSAGE_THREAD_ID=os.environ.get("TELEGRAM_MESSAGE_THREAD_ID") or "0",
+                        CHECK_TIMES=os.environ.get("CHECK_TIMES") or "07:00,13:00,19:00",
                         REQUEST_TIMEOUT=os.environ.get("REQUEST_TIMEOUT") or "25s",
                         TZ="Europe/Moscow", STATE_FILE="/data/state.json", LISTEN_ADDR=":8080")
           if any(any(char in value for char in "\n\r'") for value in values.values()):

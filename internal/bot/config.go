@@ -12,6 +12,7 @@ import (
 type Config struct {
 	Token, RelayURL, RelayKey, StateFile, ListenAddr string
 	ChatID                                           int64
+	MessageThreadID                                  int64
 	Location                                         *time.Location
 	CheckTimes                                       []string
 	Timeout                                          time.Duration
@@ -31,6 +32,10 @@ func LoadConfig() (Config, error) {
 	c.ChatID, err = strconv.ParseInt(os.Getenv("TELEGRAM_CHAT_ID"), 10, 64)
 	if err != nil || c.ChatID == 0 {
 		return c, fmt.Errorf("TELEGRAM_CHAT_ID must be a nonzero integer")
+	}
+	c.MessageThreadID, err = strconv.ParseInt(env("TELEGRAM_MESSAGE_THREAD_ID", "0"), 10, 64)
+	if err != nil || c.MessageThreadID < 0 {
+		return c, fmt.Errorf("TELEGRAM_MESSAGE_THREAD_ID must be a nonnegative integer")
 	}
 	c.Location, err = time.LoadLocation(env("TZ", "Europe/Moscow"))
 	if err != nil {

@@ -380,18 +380,69 @@ func TestSourceFetch(t *testing.T) {
 	}
 }
 func TestConfigValidation(t *testing.T) {
-	for k, v := range map[string]string{"TELEGRAM_BOT_TOKEN": "token", "TELEGRAM_RELAY_URL": "https://relay.example/send-message", "TELEGRAM_RELAY_API_KEY": "key", "TELEGRAM_CHAT_ID": "-100123", "TZ": "Europe/Moscow", "CHECK_TIMES": "07:00,13:00,19:00", "REQUEST_TIMEOUT": "25s"} {
+	for k, v := range map[string]string{"TELEGRAM_BOT_TOKEN": "token", "TELEGRAM_RELAY_URL": "https://relay.example/send-message", "TELEGRAM_RELAY_API_KEY": "key", "TELEGRAM_CHAT_ID": "-100123", "TELEGRAM_MESSAGE_THREAD_ID": "2", "TZ": "Europe/Moscow", "CHECK_TIMES": "07:00,13:00,19:00", "REQUEST_TIMEOUT": "25s"} {
 		t.Setenv(k, v)
 	}
 	c, err := LoadConfig()
-	if err != nil || c.ChatID != -100123 || len(c.CheckTimes) != 3 {
+	if err != nil || c.ChatID != -100123 || c.MessageThreadID != 2 || len(c.CheckTimes) != 3 {
 		t.Fatal(c, err)
 	}
-	for _, tc := range []struct{ key, value string }{{"TELEGRAM_CHAT_ID", "0"}, {"TELEGRAM_RELAY_URL", "ftp://relay"}, {"REQUEST_TIMEOUT", "-1s"}, {"CHECK_TIMES", "24:01"}, {"TZ", "bad/timezone"}, {"TELEGRAM_BOT_TOKEN", ""}} {
+	for _, tc := range []struct{ key, value string }{{"TELEGRAM_CHAT_ID", "0"}, {"TELEGRAM_MESSAGE_THREAD_ID", "-1"}, {"TELEGRAM_MESSAGE_THREAD_ID", "abc"}, {"TELEGRAM_RELAY_URL", "ftp://relay"}, {"REQUEST_TIMEOUT", "-1s"}, {"CHECK_TIMES", "24:01"}, {"TZ", "bad/timezone"}, {"TELEGRAM_BOT_TOKEN", ""}} {
 		t.Run(tc.key, func(t *testing.T) {
 			t.Setenv(tc.key, tc.value)
 			if _, err := LoadConfig(); err == nil {
 				t.Fatal("accepted invalid config")
+			}
+		})
+	}
+}
+
+func TestRelayErrorDescription(t *testing.T) {
+	for _, tc := range []struct{ body, want string }{
+		{`{"ok":false,"error_code":400,"description":"Bad Request: chat not found"}`, "Bad Request: chat not found"},
+		{`{"ok":false,"error":"Unauthorized"}`, "Unauthorized"},
+		{`{"ok":false,"description":"invalid private-token private-key"}`, "invalid [REDACTED] [REDACTED]"},
+		{`{"ok":false,"description":"group upgraded","parameters":{"migrate_to_chat_id":-100123}}`, "migrate_to_chat_id=-100123"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: 400, Body: io.NopCloser(strings.NewReader(tc.body)), Header: make(http.Header)}, nil
+			})}
+			relay := &Relay{Client: client, URL: "https://relay.example/send-message", Token: "private-token", Key: "private-key", ChatID: -100123}
+			err := relay.Send(context.Background(), "hello")
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatal(err)
+			}
+			if strings.Contains(err.Error(), relay.Token) || strings.Contains(err.Error(), relay.Key) {
+				t.Fatal("secret leaked")
+			}
+		})
+	}
+}
+
+func TestRelayTopic(t *testing.T) {
+	for _, threadID := range []int64{0, 2} {
+		t.Run(fmt.Sprint(threadID), func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				value, present := body["message_thread_id"]
+				if threadID == 0 && present {
+					t.Fatal("default thread must be omitted")
+				}
+				if threadID != 0 && value != float64(threadID) {
+					t.Fatalf("wrong message_thread_id: %v", value)
+				}
+				if body["chat_id"] != float64(-1003984845724) {
+					t.Fatal("wrong group")
+				}
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"ok":true}`)), Header: make(http.Header)}, nil
+			})}
+			relay := &Relay{Client: client, URL: "https://relay.example/send-message", Token: "token", Key: "key", ChatID: -1003984845724, MessageThreadID: threadID}
+			if err := relay.Send(context.Background(), "hello"); err != nil {
+				t.Fatal(err)
 			}
 		})
 	}
