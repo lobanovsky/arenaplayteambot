@@ -28,7 +28,11 @@ type Target struct {
 }
 
 func (c Config) Targets() []Target {
-	return append([]Target{{ChatID: c.ChatID, MessageThreadID: c.MessageThreadID}}, c.AdditionalTargets...)
+	var targets []Target
+	if c.ChatID != 0 {
+		targets = append(targets, Target{ChatID: c.ChatID, MessageThreadID: c.MessageThreadID})
+	}
+	return append(targets, c.AdditionalTargets...)
 }
 
 func LoadConfig() (Config, error) {
@@ -42,13 +46,18 @@ func LoadConfig() (Config, error) {
 	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
 		return c, fmt.Errorf("invalid TELEGRAM_RELAY_URL")
 	}
-	c.ChatID, err = strconv.ParseInt(os.Getenv("TELEGRAM_CHAT_ID"), 10, 64)
-	if err != nil || c.ChatID == 0 {
-		return c, fmt.Errorf("TELEGRAM_CHAT_ID must be a nonzero integer")
+	if raw := strings.TrimSpace(os.Getenv("TELEGRAM_CHAT_ID")); raw != "" {
+		c.ChatID, err = strconv.ParseInt(raw, 10, 64)
+		if err != nil || c.ChatID == 0 {
+			return c, fmt.Errorf("TELEGRAM_CHAT_ID must be a nonzero integer when set")
+		}
 	}
 	c.MessageThreadID, err = strconv.ParseInt(env("TELEGRAM_MESSAGE_THREAD_ID", "0"), 10, 64)
 	if err != nil || c.MessageThreadID < 0 {
 		return c, fmt.Errorf("TELEGRAM_MESSAGE_THREAD_ID must be a nonnegative integer")
+	}
+	if c.ChatID == 0 && c.MessageThreadID != 0 {
+		return c, fmt.Errorf("TELEGRAM_MESSAGE_THREAD_ID requires TELEGRAM_CHAT_ID")
 	}
 	if raw := strings.TrimSpace(os.Getenv("TELEGRAM_ADDITIONAL_TARGETS")); raw != "" {
 		decoder := json.NewDecoder(strings.NewReader(raw))

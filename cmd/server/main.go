@@ -25,9 +25,9 @@ func run() error {
 		return err
 	}
 	var services []*bot.Service
-	for i, target := range cfg.Targets() {
+	for _, target := range cfg.Targets() {
 		path := cfg.StateFile
-		if i > 0 {
+		if cfg.ChatID == 0 || target != (bot.Target{ChatID: cfg.ChatID, MessageThreadID: cfg.MessageThreadID}) {
 			path = bot.TargetStateFile(path, target)
 		}
 		store, state, err := bot.OpenStore(path, target.ChatID)

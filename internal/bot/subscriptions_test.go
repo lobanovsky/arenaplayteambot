@@ -17,7 +17,7 @@ import (
 func TestAutomaticGroupJoinDeliveryAndRemoval(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	sent, removed := make(chan struct{}), make(chan struct{})
+	sent, secondSent, removed := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var polls, sends atomic.Int32
 	date := time.Now().In(moscow()).AddDate(0, 0, 2).Format("02/01/2006")
 	previous := http.DefaultTransport
@@ -35,6 +35,15 @@ func TestAutomaticGroupJoinDeliveryAndRemoval(t *testing.T) {
 					return nil, r.Context().Err()
 				}
 				body = `{"ok":true,"result":[{"update_id":11,"my_chat_member":{"chat":{"id":-100456,"type":"supergroup"},"new_chat_member":{"status":"kicked"}}}]}`
+			case 3:
+				body = `{"ok":true,"result":[{"update_id":12,"my_chat_member":{"chat":{"id":-100456,"type":"supergroup"},"new_chat_member":{"status":"member"}}}]}`
+			case 4:
+				select {
+				case <-secondSent:
+				case <-r.Context().Done():
+					return nil, r.Context().Err()
+				}
+				body = `{"ok":true,"result":[{"update_id":13,"my_chat_member":{"chat":{"id":-100456,"type":"supergroup"},"new_chat_member":{"status":"left"}}}]}`
 			default:
 				close(removed)
 				<-r.Context().Done()
@@ -48,8 +57,11 @@ func TestAutomaticGroupJoinDeliveryAndRemoval(t *testing.T) {
 			if message["chat_id"] != float64(-100456) || message["message_thread_id"] != nil {
 				return nil, fmt.Errorf("wrong destination: %v", message)
 			}
-			if sends.Add(1) == 1 {
+			switch sends.Add(1) {
+			case 1:
 				close(sent)
+			case 2:
+				close(secondSent)
 			}
 			body = `{"ok":true}`
 		case ClubURL:
@@ -64,7 +76,7 @@ func TestAutomaticGroupJoinDeliveryAndRemoval(t *testing.T) {
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/html; charset=utf-8"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
 	})
 	defer func() { http.DefaultTransport = previous }()
-	cfg := Config{ChatID: -100123, MessageThreadID: 2, Token: "token", RelayURL: "https://relay.example/send-message", RelayKey: "key", StateFile: filepath.Join(t.TempDir(), "state.json"), Timeout: time.Second, Location: moscow(), CheckTimes: []string{"07:00"}}
+	cfg := Config{Token: "token", RelayURL: "https://relay.example/send-message", RelayKey: "key", StateFile: filepath.Join(t.TempDir(), "state.json"), Timeout: time.Second, Location: moscow(), CheckTimes: []string{"07:00"}}
 	done := make(chan error, 1)
 	go func() { done <- RunSubscriptions(ctx, cfg) }()
 	select {
@@ -80,7 +92,7 @@ func TestAutomaticGroupJoinDeliveryAndRemoval(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if sends.Load() != 1 {
+	if sends.Load() != 2 {
 		t.Fatal("wrong message count", sends.Load())
 	}
 	store, state, err := openSubscriptions(cfg.StateFile + ".subscriptions.json")
@@ -88,7 +100,7 @@ func TestAutomaticGroupJoinDeliveryAndRemoval(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if state.Groups[-100456] || state.Offset != 12 {
+	if state.Groups[-100456] || state.Offset != 14 {
 		t.Fatal(state)
 	}
 	gameStore, games, err := OpenStore(TargetStateFile(cfg.StateFile, Target{ChatID: -100456}), -100456)

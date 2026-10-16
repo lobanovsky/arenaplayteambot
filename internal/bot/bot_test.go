@@ -490,6 +490,25 @@ func TestAdditionalTargetsConfig(t *testing.T) {
 	}
 }
 
+func TestAutomaticGroupsWithoutManualChat(t *testing.T) {
+	setConfigEnv(t)
+	t.Setenv("TELEGRAM_CHAT_ID", "")
+	t.Setenv("TELEGRAM_MESSAGE_THREAD_ID", "")
+	cfg, err := LoadConfig()
+	if err != nil || len(cfg.Targets()) != 0 || !cfg.AutoGroups {
+		t.Fatal("bot must start without any manual recipients", cfg, err)
+	}
+	t.Setenv("TELEGRAM_ADDITIONAL_TARGETS", `[{"chat_id":-100456}]`)
+	cfg, err = LoadConfig()
+	if err != nil || len(cfg.Targets()) != 1 || cfg.Targets()[0].ChatID != -100456 {
+		t.Fatal(cfg, err)
+	}
+	t.Setenv("TELEGRAM_MESSAGE_THREAD_ID", "2")
+	if _, err := LoadConfig(); err == nil {
+		t.Fatal("topic without group accepted")
+	}
+}
+
 func TestIndependentTargetDelivery(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "state.json")
 	g := sampleGame()

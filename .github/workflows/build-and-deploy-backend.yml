@@ -106,16 +106,18 @@ jobs:
           python3 - <<'PYENV'
           import os
           from pathlib import Path
-          required = ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "TELEGRAM_RELAY_URL", "TELEGRAM_RELAY_API_KEY"]
+          required = ["TELEGRAM_BOT_TOKEN", "TELEGRAM_RELAY_URL", "TELEGRAM_RELAY_API_KEY"]
           values = {key: os.environ[key] for key in required}
           if any(not value for value in values.values()):
               raise SystemExit("Missing required Telegram secrets")
-          values.update(TELEGRAM_MESSAGE_THREAD_ID=os.environ.get("TELEGRAM_MESSAGE_THREAD_ID") or "0",
-                        TELEGRAM_ADDITIONAL_TARGETS=os.environ.get("TELEGRAM_ADDITIONAL_TARGETS") or "[]",
-                        TELEGRAM_AUTO_GROUPS=os.environ.get("TELEGRAM_AUTO_GROUPS") or "true",
+          values.update(TELEGRAM_AUTO_GROUPS=os.environ.get("TELEGRAM_AUTO_GROUPS") or "true",
                         CHECK_TIMES=os.environ.get("CHECK_TIMES") or "07:00,13:00,19:00",
                         REQUEST_TIMEOUT=os.environ.get("REQUEST_TIMEOUT") or "25s",
                         TZ="Europe/Moscow", STATE_FILE="/data/state.json", LISTEN_ADDR=":8080")
+          # Ручные получатели необязательны; обычные группы подключаются автоматически.
+          for key in ("TELEGRAM_CHAT_ID", "TELEGRAM_MESSAGE_THREAD_ID", "TELEGRAM_ADDITIONAL_TARGETS"):
+              if os.environ.get(key):
+                  values[key] = os.environ[key]
           if any(any(char in value for char in "\n\r'") for value in values.values()):
               raise SystemExit("Unsupported character in configuration")
           # Одинарные кавычки защищают секреты от интерполяции Compose.

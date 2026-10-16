@@ -6,7 +6,7 @@ Go-сервис уведомлений для `@arenaplayteam_bot`. Читает
 зарубежный `telegram-api`, без прямого обращения к Telegram из сервиса.
 
 Проверки выполняются при запуске и в **07:00, 13:00, 19:00 по Москве**.
-Первый запуск сообщает обо всех будущих играх. Затем бот сообщает о новых
+При подключении группы бот сразу сообщает обо всех будущих играх. Затем сообщает о новых
 матчах, переносах даты/времени, изменении арены и появлении трансляций.
 Время в сообщениях — московское. Результаты игр и отмены по исчезновению строки
 не рассылаются. Видео ищутся до конца дня, следующего за днём матча.
@@ -16,31 +16,11 @@ Go-сервис уведомлений для `@arenaplayteam_bot`. Читает
 
 ## Настройка и запуск
 
-1. Добавьте бота в группу команды и разрешите отправлять сообщения.
-   Для канала нужны права администратора на публикацию.
-2. Получите числовой `chat_id`: отправьте сообщение в группу, затем с машины,
-   имеющей доступ к Telegram, выполните запрос `getUpdates` для этого бота
-   и возьмите `result[].message.chat.id` (для канала — `channel_post.chat.id`).
-   Не используйте ID личного чата вместо ID группы. Например:
-   ```sh
-   read -s TELEGRAM_BOT_TOKEN
-   export TELEGRAM_BOT_TOKEN
-   python3 - <<'PY'
-   import json, os, urllib.request
-   url = 'https://api.telegram.org/bot' + os.environ['TELEGRAM_BOT_TOKEN'] + '/getUpdates'
-   with urllib.request.urlopen(url, timeout=25) as response:
-       for update in json.load(response).get('result', []):
-           message = update.get('message') or update.get('channel_post') or {}
-           if 'chat' in message:
-               print(message['chat']['id'], message['chat'].get('title', ''))
-   PY
-   unset TELEGRAM_BOT_TOKEN
-   ```
-   Если ответ пуст, отправьте в группе `/start@arenaplayteam_bot` и повторите.
-   Relay поддерживает только отправку; для `getUpdates` нужен прямой доступ.
-3. Скопируйте `.env.example` в `.env` и заполните четыре `TELEGRAM_*` настройки.
-   `TELEGRAM_RELAY_URL` — полный URL с `/send-message`.
-4. Запустите:
+1. Скопируйте `.env.example` в `.env` и заполните `TELEGRAM_BOT_TOKEN`,
+   `TELEGRAM_RELAY_URL` и `TELEGRAM_RELAY_API_KEY`.
+   `TELEGRAM_RELAY_URL` — полный URL с `/send-message`; relay также должен
+   поддерживать `/get-updates`.
+2. Запустите:
    ```sh
    mkdir -p data
    chmod 700 data
@@ -48,6 +28,11 @@ Go-сервис уведомлений для `@arenaplayteam_bot`. Читает
    docker compose up -d --build
    docker compose logs -f backend
    ```
+3. Добавьте `@arenaplayteam_bot` в группу с правом отправлять сообщения.
+   Бот сам сохранит её ID и сразу отправит будущие игры с найденными трансляциями.
+   При повторном добавлении он снова объявит будущие игры; при обычном перезапуске
+   уже отправленные уведомления не повторяются. До добавления в группы бот
+   работает без получателей. При удалении из группы её рассылка отключается.
 
 Токен, ключ relay и `.env` не входят в исходники или Docker-образ.
 При наличии `$` в значении `.env` заключите его в одинарные кавычки.
@@ -56,7 +41,7 @@ Go-сервис уведомлений для `@arenaplayteam_bot`. Читает
 | Переменная | Значение по умолчанию |
 | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | Обязательна |
-| `TELEGRAM_CHAT_ID` | Обязательна, ненулевой числовой ID |
+| `TELEGRAM_CHAT_ID` | Не задана — необязательный ручной получатель |
 | `TELEGRAM_MESSAGE_THREAD_ID` | `0` — общий чат; ID топика для форума |
 | `TELEGRAM_ADDITIONAL_TARGETS` | `[]` — дополнительные получатели в JSON |
 | `TELEGRAM_AUTO_GROUPS` | `true` — автоматически подключать группы при добавлении бота |
@@ -87,8 +72,8 @@ Go-сервис уведомлений для `@arenaplayteam_bot`. Читает
 Он получает событие `my_chat_member`, сохраняет ID и начинает рассылку в общий чат
 без топика. При удалении бота из группы подписка отключается. Список групп и
 позиция чтения событий сохраняются в `state.json.subscriptions.json`; история
-игр сохраняется отдельно для каждого получателя. Перезапуск и повторное добавление
-не сбрасывают историю отправок.
+игр сохраняется отдельно для каждого получателя. Перезапуск не сбрасывает историю отправок; повторное добавление
+снова объявляет будущие игры, чтобы подтвердить подключение.
 
 Для этого зарубежный relay должен поддерживать `POST /get-updates` рядом с
 `POST /send-message`. Бот получает только `my_chat_member`, не сообщения группы.
@@ -152,10 +137,10 @@ SCP/SSH, проверка образа и `/healthz`, откат конфигу�
 - `DOCKER_USERNAME`, `DOCKER_TOKEN`;
 - `DEPLOY_HOST_IP`, `DEPLOY_HOST_USERNAME`, `DEPLOY_HOST_PORT`,
   `DEPLOY_HOST_KEY`, `DEPLOY_HOST_PROJECT_PATH`;
-- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_RELAY_URL`,
+- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_RELAY_URL`,
   `TELEGRAM_RELAY_API_KEY`.
 
-Необязательные Secrets: `CHECK_TIMES`, `REQUEST_TIMEOUT`, `TELEGRAM_MESSAGE_THREAD_ID`,
+Необязательные Secrets: `CHECK_TIMES`, `REQUEST_TIMEOUT`, `TELEGRAM_CHAT_ID`, `TELEGRAM_MESSAGE_THREAD_ID`,
 `TELEGRAM_ADDITIONAL_TARGETS`, `TELEGRAM_AUTO_GROUPS`. Часовой пояс деплоя —
 `Europe/Moscow`. На сервере должны быть Docker с Compose и права SSH-пользователя
 на Docker и каталог проекта. После первого деплоя проверьте логи и права бота
@@ -181,13 +166,9 @@ docker build -t arenaplayteambot:check .
 парсеры, переносы, перезапуск, повторы и ошибки relay, расписание и защиту файла
 состояния. После пересоздания контейнера сохранённые уведомления не повторяются.
 
-## Топик «лхл-77»
+## Необязательные ручные получатели
 
-Для группы «какеист»: `TELEGRAM_CHAT_ID=-1003984845724`,
-`TELEGRAM_MESSAGE_THREAD_ID=2`. Оба значения задаются в GitHub Actions Secrets.
-Relay должен поддерживать необязательный `message_thread_id` и передавать его
-в Telegram `sendMessage`; прежние клиенты без этого поля продолжают работать.
-Сначала обновите relay, затем разверните бота с новым Secret. Не удаляйте `data`:
-неудачные отправки повторятся автоматически. Смена топика не сбрасывает историю
-уже отправленных сообщений; для другого назначения используйте отдельный файл
-состояния, если требуется заново объявить будущие игры.
+Для специальных назначений (например, конкретного топика) можно задать
+`TELEGRAM_CHAT_ID` и `TELEGRAM_MESSAGE_THREAD_ID`. Эти настройки не требуются
+для автоматического подключения обычных групп. Если удаляете ручного получателя,
+уберите оба значения из `.env` и GitHub Secrets, чтобы следующий деплой не вернул их.

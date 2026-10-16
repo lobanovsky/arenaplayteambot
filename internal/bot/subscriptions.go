@@ -68,9 +68,10 @@ func (r *Relay) Updates(ctx context.Context, offset int64) ([]Update, error) {
 }
 
 type subscriptions struct {
-	Version int            `json:"version"`
-	Offset  int64          `json:"offset"`
-	Groups  map[int64]bool `json:"groups"`
+	Version  int            `json:"version"`
+	Offset   int64          `json:"offset"`
+	Groups   map[int64]bool `json:"groups"`
+	Announce map[int64]bool `json:"announce,omitempty"`
 }
 
 func openSubscriptions(file string) (*Store, *subscriptions, error) {
@@ -100,6 +101,9 @@ func openSubscriptions(file string) (*Store, *subscriptions, error) {
 }
 
 func (s *subscriptions) apply(updates []Update, manual map[int64]bool) {
+	if s.Announce == nil {
+		s.Announce = map[int64]bool{}
+	}
 	for _, update := range updates {
 		if update.ID < s.Offset {
 			continue
@@ -109,6 +113,7 @@ func (s *subscriptions) apply(updates []Update, manual map[int64]bool) {
 		if m == nil || m.Chat.ID == 0 || manual[m.Chat.ID] || (m.Chat.Type != "group" && m.Chat.Type != "supergroup") {
 			continue
 		}
+		wasActive := s.Groups[m.Chat.ID]
 		switch m.NewMember.Status {
 		case "member", "administrator", "creator":
 			s.Groups[m.Chat.ID] = true
@@ -116,6 +121,12 @@ func (s *subscriptions) apply(updates []Update, manual map[int64]bool) {
 			s.Groups[m.Chat.ID] = m.NewMember.IsMember
 		case "left", "kicked":
 			s.Groups[m.Chat.ID] = false
+		}
+		if !wasActive && s.Groups[m.Chat.ID] {
+			s.Announce[m.Chat.ID] = true
+		}
+		if !s.Groups[m.Chat.ID] {
+			delete(s.Announce, m.Chat.ID)
 		}
 	}
 }
@@ -147,7 +158,7 @@ func RunSubscriptions(ctx context.Context, cfg Config) error {
 	}()
 	reconcile := func() error {
 		for chatID, w := range workers {
-			if !state.Groups[chatID] || manual[chatID] {
+			if !state.Groups[chatID] || manual[chatID] || state.Announce[chatID] {
 				w.cancel()
 				<-w.done
 				delete(workers, chatID)
@@ -162,6 +173,25 @@ func RunSubscriptions(ctx context.Context, cfg Config) error {
 			gameStore, games, err := OpenStore(TargetStateFile(cfg.StateFile, target), chatID)
 			if err != nil {
 				return err
+			}
+			if state.Announce[chatID] {
+				// При новом добавлении показываем будущие игры, даже если бот был в группе раньше.
+				for _, record := range games.Games {
+					if record.Current.Starts.After(time.Now()) {
+						record.Sent = nil
+						record.Attempts = 0
+						record.RetryAt = time.Time{}
+					}
+				}
+				if err := gameStore.Save(games); err != nil {
+					gameStore.Close()
+					return err
+				}
+				delete(state.Announce, chatID)
+				if err := store.Save(state); err != nil {
+					gameStore.Close()
+					return err
+				}
 			}
 			workerCtx, cancel := context.WithCancel(ctx)
 			done := make(chan struct{})
