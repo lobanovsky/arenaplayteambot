@@ -432,7 +432,7 @@ func TestSourceFetch(t *testing.T) {
 }
 func setConfigEnv(t *testing.T) {
 	t.Helper()
-	for k, v := range map[string]string{"TELEGRAM_BOT_TOKEN": "token", "TELEGRAM_RELAY_URL": "https://relay.example/send-message", "TELEGRAM_RELAY_API_KEY": "key", "TELEGRAM_CHAT_ID": "-100123", "TELEGRAM_MESSAGE_THREAD_ID": "2", "TELEGRAM_ADDITIONAL_TARGETS": "", "TZ": "Europe/Moscow", "CHECK_TIMES": "07:00,13:00,19:00", "REQUEST_TIMEOUT": "25s"} {
+	for k, v := range map[string]string{"TELEGRAM_BOT_TOKEN": "token", "TELEGRAM_RELAY_URL": "https://relay.example/send-message", "TELEGRAM_RELAY_API_KEY": "key", "TELEGRAM_CHAT_ID": "-100123", "TELEGRAM_MESSAGE_THREAD_ID": "2", "TELEGRAM_ADDITIONAL_TARGETS": "", "TELEGRAM_AUTO_GROUPS": "true", "TZ": "Europe/Moscow", "CHECK_TIMES": "07:00,13:00,19:00", "REQUEST_TIMEOUT": "25s"} {
 		t.Setenv(k, v)
 	}
 }
@@ -442,7 +442,7 @@ func TestConfigValidation(t *testing.T) {
 	if err != nil || c.ChatID != -100123 || c.MessageThreadID != 2 || len(c.CheckTimes) != 3 {
 		t.Fatal(c, err)
 	}
-	for _, tc := range []struct{ key, value string }{{"TELEGRAM_CHAT_ID", "0"}, {"TELEGRAM_MESSAGE_THREAD_ID", "-1"}, {"TELEGRAM_MESSAGE_THREAD_ID", "abc"}, {"TELEGRAM_RELAY_URL", "ftp://relay"}, {"REQUEST_TIMEOUT", "-1s"}, {"CHECK_TIMES", "24:01"}, {"TZ", "bad/timezone"}, {"TELEGRAM_BOT_TOKEN", ""}} {
+	for _, tc := range []struct{ key, value string }{{"TELEGRAM_AUTO_GROUPS", "invalid"}, {"TELEGRAM_CHAT_ID", "0"}, {"TELEGRAM_MESSAGE_THREAD_ID", "-1"}, {"TELEGRAM_MESSAGE_THREAD_ID", "abc"}, {"TELEGRAM_RELAY_URL", "ftp://relay"}, {"REQUEST_TIMEOUT", "-1s"}, {"CHECK_TIMES", "24:01"}, {"TZ", "bad/timezone"}, {"TELEGRAM_BOT_TOKEN", ""}} {
 		t.Run(tc.key, func(t *testing.T) {
 			t.Setenv(tc.key, tc.value)
 			if _, err := LoadConfig(); err == nil {

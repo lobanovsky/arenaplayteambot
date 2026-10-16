@@ -16,6 +16,7 @@ type Config struct {
 	ChatID                                           int64
 	MessageThreadID                                  int64
 	AdditionalTargets                                []Target
+	AutoGroups                                       bool
 	Location                                         *time.Location
 	CheckTimes                                       []string
 	Timeout                                          time.Duration
@@ -68,6 +69,10 @@ func LoadConfig() (Config, error) {
 			return c, fmt.Errorf("duplicate Telegram target: chat_id=%d message_thread_id=%d", target.ChatID, target.MessageThreadID)
 		}
 		seen[target] = true
+	}
+	c.AutoGroups, err = strconv.ParseBool(env("TELEGRAM_AUTO_GROUPS", "true"))
+	if err != nil {
+		return c, fmt.Errorf("invalid TELEGRAM_AUTO_GROUPS")
 	}
 	c.Location, err = time.LoadLocation(env("TZ", "Europe/Moscow"))
 	if err != nil {

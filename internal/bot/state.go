@@ -33,18 +33,10 @@ func TargetStateFile(base string, target Target) string {
 }
 
 func OpenStore(path string, chatID int64) (*Store, *State, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return nil, nil, err
-	}
-	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	store, err := openLockedStore(path)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		lock.Close()
-		return nil, nil, fmt.Errorf("state already in use: %w", err)
-	}
-	store := &Store{Path: path, lock: lock}
 	state := &State{Version: 1, ChatID: chatID, Games: map[string]*Record{}}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -70,7 +62,22 @@ func OpenStore(path string, chatID int64) (*Store, *State, error) {
 	}
 	return store, state, nil
 }
-func (s *Store) Save(state *State) error {
+
+func openLockedStore(path string) (*Store, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return nil, err
+	}
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		lock.Close()
+		return nil, fmt.Errorf("state already in use: %w", err)
+	}
+	return &Store{Path: path, lock: lock}, nil
+}
+func (s *Store) Save(state any) error {
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err

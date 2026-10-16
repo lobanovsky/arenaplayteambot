@@ -50,7 +50,11 @@ func run() error {
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 	server := &http.Server{Addr: cfg.ListenAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-	results := make(chan error, len(services)+1)
+	workers := len(services) + 1
+	if cfg.AutoGroups {
+		workers++
+	}
+	results := make(chan error, workers)
 	go func() {
 		err := server.ListenAndServe()
 		if errors.Is(err, http.ErrServerClosed) {
@@ -61,6 +65,9 @@ func run() error {
 	for _, service := range services {
 		go func() { results <- service.Run(ctx, cfg.CheckTimes) }()
 		service.Logger.Info("started", "check_times", cfg.CheckTimes, "timezone", cfg.Location.String())
+	}
+	if cfg.AutoGroups {
+		go func() { results <- bot.RunSubscriptions(ctx, cfg) }()
 	}
 	var result error
 	completed := false
@@ -74,7 +81,7 @@ func run() error {
 	defer cancel()
 	server.Shutdown(shutdown)
 	// Дожидаемся завершения рабочего цикла перед освобождением файловой блокировки.
-	remaining := len(services) + 1
+	remaining := workers
 	if completed {
 		remaining--
 	}
