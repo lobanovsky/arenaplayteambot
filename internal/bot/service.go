@@ -15,6 +15,14 @@ type Service struct {
 	State    *State
 	Store    *Store
 	Location *time.Location
+	Logger   *slog.Logger
+}
+
+func (s *Service) logger() *slog.Logger {
+	if s.Logger != nil {
+		return s.Logger
+	}
+	return slog.Default()
 }
 
 func sameSchedule(a, b Game) bool {
@@ -56,12 +64,12 @@ func videoDeadline(g Game, loc *time.Location) time.Time {
 func (s *Service) Check(ctx context.Context, now time.Time) error {
 	games, err := s.Source.Games(ctx)
 	if err != nil {
-		slog.Error("schedule check failed; preserving state", "error", err)
+		s.logger().Error("schedule check failed; preserving state", "error", err)
 		return nil
 	}
 	videos, videoErr := s.Source.Videos(ctx)
 	if videoErr != nil {
-		slog.Warn("VK unavailable; keeping saved links", "error", videoErr)
+		s.logger().Warn("VK unavailable; keeping saved links", "error", videoErr)
 	}
 	seen := map[string]bool{}
 	for _, g := range games {
@@ -143,7 +151,7 @@ func (s *Service) Check(ctx context.Context, now time.Time) error {
 				delay = 15 * time.Minute
 			}
 			r.RetryAt = now.Add(delay)
-			slog.Error("notification failed", "game", id, "retry_at", r.RetryAt, "error", err)
+			s.logger().Error("notification failed", "game", id, "retry_at", r.RetryAt, "error", err)
 		} else {
 			snapshot := r.Current
 			r.Sent = &snapshot
@@ -155,7 +163,7 @@ func (s *Service) Check(ctx context.Context, now time.Time) error {
 			return fmt.Errorf("save delivery state: %w", err)
 		}
 	}
-	slog.Info("check complete", "games", len(games), "messages", sent)
+	s.logger().Info("check complete", "games", len(games), "messages", sent)
 	return nil
 }
 func (s *Service) Run(ctx context.Context, slots []string) error {

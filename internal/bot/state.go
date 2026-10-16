@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -24,6 +25,11 @@ type State struct {
 type Store struct {
 	Path string
 	lock *os.File
+}
+
+func TargetStateFile(base string, target Target) string {
+	ext := filepath.Ext(base)
+	return fmt.Sprintf("%s.chat-%d.thread-%d%s", strings.TrimSuffix(base, ext), target.ChatID, target.MessageThreadID, ext)
 }
 
 func OpenStore(path string, chatID int64) (*Store, *State, error) {

@@ -430,10 +430,14 @@ func TestSourceFetch(t *testing.T) {
 		t.Fatal("unreadable catalog reported success")
 	}
 }
-func TestConfigValidation(t *testing.T) {
-	for k, v := range map[string]string{"TELEGRAM_BOT_TOKEN": "token", "TELEGRAM_RELAY_URL": "https://relay.example/send-message", "TELEGRAM_RELAY_API_KEY": "key", "TELEGRAM_CHAT_ID": "-100123", "TELEGRAM_MESSAGE_THREAD_ID": "2", "TZ": "Europe/Moscow", "CHECK_TIMES": "07:00,13:00,19:00", "REQUEST_TIMEOUT": "25s"} {
+func setConfigEnv(t *testing.T) {
+	t.Helper()
+	for k, v := range map[string]string{"TELEGRAM_BOT_TOKEN": "token", "TELEGRAM_RELAY_URL": "https://relay.example/send-message", "TELEGRAM_RELAY_API_KEY": "key", "TELEGRAM_CHAT_ID": "-100123", "TELEGRAM_MESSAGE_THREAD_ID": "2", "TELEGRAM_ADDITIONAL_TARGETS": "", "TZ": "Europe/Moscow", "CHECK_TIMES": "07:00,13:00,19:00", "REQUEST_TIMEOUT": "25s"} {
 		t.Setenv(k, v)
 	}
+}
+func TestConfigValidation(t *testing.T) {
+	setConfigEnv(t)
 	c, err := LoadConfig()
 	if err != nil || c.ChatID != -100123 || c.MessageThreadID != 2 || len(c.CheckTimes) != 3 {
 		t.Fatal(c, err)
@@ -445,6 +449,94 @@ func TestConfigValidation(t *testing.T) {
 				t.Fatal("accepted invalid config")
 			}
 		})
+	}
+}
+
+func TestAdditionalTargetsConfig(t *testing.T) {
+	setConfigEnv(t)
+	for _, tc := range []struct {
+		name, raw string
+		count     int
+	}{
+		{"legacy", "", 1},
+		{"empty", "[]", 1},
+		{"group and topic", `[{"chat_id":-100456},{"chat_id":-100789,"message_thread_id":7}]`, 3},
+		{"same group different topic", `[{"chat_id":-100123}]`, 2},
+		{"duplicate primary", `[{"chat_id":-100123,"message_thread_id":2}]`, 0},
+		{"duplicate additional", `[{"chat_id":-100456},{"chat_id":-100456,"message_thread_id":0}]`, 0},
+		{"missing chat", `[{"message_thread_id":3}]`, 0},
+		{"negative topic", `[{"chat_id":-100456,"message_thread_id":-1}]`, 0},
+		{"typo", `[{"chat_id":-100456,"thread_id":3}]`, 0},
+		{"invalid json", `[{`, 0},
+		{"extra json", `[] []`, 0},
+		{"fractional id", `[{"chat_id":-100.5}]`, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("TELEGRAM_ADDITIONAL_TARGETS", tc.raw)
+			cfg, err := LoadConfig()
+			if tc.count == 0 {
+				if err == nil {
+					t.Fatal("accepted invalid targets")
+				}
+				return
+			}
+			if err != nil || len(cfg.Targets()) != tc.count {
+				t.Fatal(cfg, err)
+			}
+			if tc.name == "group and topic" && cfg.Targets()[1] != (Target{ChatID: -100456}) {
+				t.Fatal("ordinary group must have no topic")
+			}
+		})
+	}
+}
+
+func TestIndependentTargetDelivery(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "state.json")
+	g := sampleGame()
+	now := moment("2026-10-15 19:00")
+	source := &fakeSource{games: []Game{g}}
+	open := func(path string, target Target, sender *fakeSender) *Service {
+		t.Helper()
+		store, state, err := OpenStore(path, target.ChatID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(store.Close)
+		return &Service{Source: source, Sender: sender, State: state, Store: store, Location: moscow()}
+	}
+	primarySender, extraSender := &fakeSender{}, &fakeSender{err: errors.New("forbidden")}
+	primary := open(base, Target{ChatID: -100123, MessageThreadID: 2}, primarySender)
+	check(t, primary, now)
+	primary.Store.Close()
+	// Существующая история остаётся на месте при добавлении обычной группы.
+	primary = open(base, Target{ChatID: -100123, MessageThreadID: 2}, primarySender)
+	target := Target{ChatID: -100456}
+	path := TargetStateFile(base, target)
+	extra := open(path, target, extraSender)
+	check(t, extra, now)
+	check(t, primary, now)
+	if len(primarySender.messages) != 1 || extra.State.Games[g.ID].Attempts != 1 {
+		t.Fatal("delivery history or retry is shared")
+	}
+	extraSender.err = nil
+	check(t, extra, now.Add(time.Minute))
+	if len(extraSender.messages) != 1 || !strings.Contains(extraSender.messages[0], "Новая игра") {
+		t.Fatal(extraSender.messages)
+	}
+	extra.Store.Close()
+	extra = open(TargetStateFile(base, target), target, extraSender)
+	check(t, extra, now.Add(2*time.Minute))
+	if len(extraSender.messages) != 1 {
+		t.Fatal("duplicate after restart")
+	}
+	if path == base || path == TargetStateFile(base, Target{ChatID: target.ChatID, MessageThreadID: 2}) {
+		t.Fatal("state paths collide")
+	}
+	source.videos = []Video{{Title: "Arena Play Легенда", Date: time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC), URL: "https://vkvideo.ru/video-71330880_123"}}
+	check(t, primary, now.Add(3*time.Minute))
+	check(t, extra, now.Add(3*time.Minute))
+	if len(primarySender.messages) != 2 || len(extraSender.messages) != 2 || !strings.Contains(extraSender.messages[1], source.videos[0].URL) {
+		t.Fatal("video must reach both targets")
 	}
 }
 

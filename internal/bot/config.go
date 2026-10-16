@@ -1,7 +1,9 @@
 package bot
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"strconv"
@@ -13,9 +15,19 @@ type Config struct {
 	Token, RelayURL, RelayKey, StateFile, ListenAddr string
 	ChatID                                           int64
 	MessageThreadID                                  int64
+	AdditionalTargets                                []Target
 	Location                                         *time.Location
 	CheckTimes                                       []string
 	Timeout                                          time.Duration
+}
+
+type Target struct {
+	ChatID          int64 `json:"chat_id"`
+	MessageThreadID int64 `json:"message_thread_id,omitempty"`
+}
+
+func (c Config) Targets() []Target {
+	return append([]Target{{ChatID: c.ChatID, MessageThreadID: c.MessageThreadID}}, c.AdditionalTargets...)
 }
 
 func LoadConfig() (Config, error) {
@@ -36,6 +48,26 @@ func LoadConfig() (Config, error) {
 	c.MessageThreadID, err = strconv.ParseInt(env("TELEGRAM_MESSAGE_THREAD_ID", "0"), 10, 64)
 	if err != nil || c.MessageThreadID < 0 {
 		return c, fmt.Errorf("TELEGRAM_MESSAGE_THREAD_ID must be a nonnegative integer")
+	}
+	if raw := strings.TrimSpace(os.Getenv("TELEGRAM_ADDITIONAL_TARGETS")); raw != "" {
+		decoder := json.NewDecoder(strings.NewReader(raw))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&c.AdditionalTargets); err != nil {
+			return c, fmt.Errorf("invalid TELEGRAM_ADDITIONAL_TARGETS: %w", err)
+		}
+		if decoder.Decode(new(any)) != io.EOF {
+			return c, fmt.Errorf("invalid TELEGRAM_ADDITIONAL_TARGETS: expected one JSON array")
+		}
+	}
+	seen := map[Target]bool{}
+	for _, target := range c.Targets() {
+		if target.ChatID == 0 || target.MessageThreadID < 0 {
+			return c, fmt.Errorf("invalid Telegram target: nonzero chat_id and nonnegative message_thread_id required")
+		}
+		if seen[target] {
+			return c, fmt.Errorf("duplicate Telegram target: chat_id=%d message_thread_id=%d", target.ChatID, target.MessageThreadID)
+		}
+		seen[target] = true
 	}
 	c.Location, err = time.LoadLocation(env("TZ", "Europe/Moscow"))
 	if err != nil {

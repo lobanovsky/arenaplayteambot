@@ -24,11 +24,24 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	store, state, err := bot.OpenStore(cfg.StateFile, cfg.ChatID)
-	if err != nil {
-		return err
+	var services []*bot.Service
+	for i, target := range cfg.Targets() {
+		path := cfg.StateFile
+		if i > 0 {
+			path = bot.TargetStateFile(path, target)
+		}
+		store, state, err := bot.OpenStore(path, target.ChatID)
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		services = append(services, &bot.Service{
+			Source: bot.NewWebSource(cfg.Timeout, cfg.Location),
+			Sender: &bot.Relay{Client: &http.Client{Timeout: cfg.Timeout}, URL: cfg.RelayURL, Key: cfg.RelayKey, Token: cfg.Token, ChatID: target.ChatID, MessageThreadID: target.MessageThreadID},
+			State:  state, Store: store, Location: cfg.Location,
+			Logger: slog.Default().With("chat_id", target.ChatID, "message_thread_id", target.MessageThreadID),
+		})
 	}
-	defer store.Close()
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	mux := http.NewServeMux()
@@ -37,7 +50,7 @@ func run() error {
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 	server := &http.Server{Addr: cfg.ListenAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-	results := make(chan error, 2)
+	results := make(chan error, len(services)+1)
 	go func() {
 		err := server.ListenAndServe()
 		if errors.Is(err, http.ErrServerClosed) {
@@ -45,9 +58,10 @@ func run() error {
 		}
 		results <- err
 	}()
-	service := &bot.Service{Source: bot.NewWebSource(cfg.Timeout, cfg.Location), Sender: &bot.Relay{Client: &http.Client{Timeout: cfg.Timeout}, URL: cfg.RelayURL, Key: cfg.RelayKey, Token: cfg.Token, ChatID: cfg.ChatID, MessageThreadID: cfg.MessageThreadID}, State: state, Store: store, Location: cfg.Location}
-	go func() { results <- service.Run(ctx, cfg.CheckTimes) }()
-	slog.Info("started", "check_times", cfg.CheckTimes, "timezone", cfg.Location.String(), "message_thread_id", cfg.MessageThreadID)
+	for _, service := range services {
+		go func() { results <- service.Run(ctx, cfg.CheckTimes) }()
+		service.Logger.Info("started", "check_times", cfg.CheckTimes, "timezone", cfg.Location.String())
+	}
 	var result error
 	completed := false
 	select {
@@ -60,7 +74,7 @@ func run() error {
 	defer cancel()
 	server.Shutdown(shutdown)
 	// Дожидаемся завершения рабочего цикла перед освобождением файловой блокировки.
-	remaining := 2
+	remaining := len(services) + 1
 	if completed {
 		remaining--
 	}
