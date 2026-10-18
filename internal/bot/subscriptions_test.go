@@ -3,9 +3,12 @@ package bot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +16,44 @@ import (
 	"testing"
 	"time"
 )
+
+func TestUpdatesUseFreshConnection(t *testing.T) {
+	var connections atomic.Int32
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/get-updates" || !r.Close {
+			t.Error("poll must close its relay connection", r.URL, r.Close)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"ok":true,"result":[]}`)
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			connections.Add(1)
+		}
+	}
+	server.Start()
+	defer server.Close()
+	relay := &Relay{URL: server.URL + "/send-message", Client: server.Client(), Token: "token", Key: "key"}
+	for i := 0; i < 3; i++ {
+		if _, err := relay.Updates(context.Background(), 42); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if connections.Load() != 3 {
+		t.Fatal("polling reused a relay connection", connections.Load())
+	}
+}
+
+func TestUpdatesNetworkErrorIsUsefulAndRedacted(t *testing.T) {
+	relay := &Relay{URL: "https://relay.example/send-message", Token: "private-token", Key: "private-key", Client: &http.Client{}}
+	relay.Client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("read: connection reset by peer private-token private-key")
+	})
+	_, err := relay.Updates(context.Background(), 42)
+	if err == nil || !strings.Contains(err.Error(), "connection reset by peer") || strings.Contains(err.Error(), relay.Token) || strings.Contains(err.Error(), relay.Key) {
+		t.Fatal("missing or unsafe network error", err)
+	}
+}
 
 func TestAutomaticGroupJoinDeliveryAndRemoval(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

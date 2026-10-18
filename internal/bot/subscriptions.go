@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"strings"
 	"time"
 )
 
@@ -49,9 +50,17 @@ func (r *Relay) Updates(ctx context.Context, offset int64) ([]Update, error) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Api-Key", r.Key)
+	// Постоянное соединение до relay зависает после нескольких минут опроса.
+	req.Close = true
 	resp, err := r.Client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("updates relay request failed")
+		message := strings.ReplaceAll(err.Error(), u.String(), "[relay]")
+		for _, secret := range []string{r.Token, r.Key} {
+			if secret != "" {
+				message = strings.ReplaceAll(message, secret, "[REDACTED]")
+			}
+		}
+		return nil, fmt.Errorf("updates relay request failed: %s", message)
 	}
 	defer resp.Body.Close()
 	var result struct {
