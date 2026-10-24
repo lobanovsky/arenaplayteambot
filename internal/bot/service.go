@@ -69,7 +69,7 @@ func (s *Service) Check(ctx context.Context, now time.Time) error {
 	}
 	videos, videoErr := s.Source.Videos(ctx)
 	if videoErr != nil {
-		s.logger().Warn("VK unavailable; keeping saved links", "error", videoErr)
+		s.logger().Warn("video sources unavailable; keeping saved links", "error", videoErr)
 	}
 	seen := map[string]bool{}
 	for _, g := range games {

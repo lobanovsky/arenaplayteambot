@@ -19,6 +19,7 @@ import (
 
 const ClubURL = "https://lhl-77.ru/clubs/686"
 const VideoCatalog = "https://vkvideo.ru/@lhl_77/all"
+const RutubeCatalogAPI = "https://rutube.ru/api/video/person/35268475/"
 const TeamScheduleURL = "https://arenaplayteam.ru/data/schedule.json"
 
 type Game struct {
@@ -99,6 +100,23 @@ func (s *WebSource) Videos(ctx context.Context) ([]Video, error) {
 	} else {
 		last = err
 	}
+	// Rutube отдаёт метаданные анонсов через публичный JSON-каталог.
+	for page := 1; page <= 3; page++ {
+		body, err := s.fetch(ctx, fmt.Sprintf("%s?page=%d", RutubeCatalogAPI, page))
+		if err != nil {
+			last = err
+			break
+		}
+		videos, hasNext, err := ParseRutubeVideos(body)
+		if err != nil {
+			last = err
+			break
+		}
+		out = append(out, videos...)
+		if !hasNext {
+			break
+		}
+	}
 	for _, url := range []string{VideoCatalog, "https://vkvideo.ru/videos-71330880"} {
 		page, err := s.fetch(ctx, url)
 		if err != nil {
@@ -114,7 +132,7 @@ func (s *WebSource) Videos(ctx context.Context) ([]Video, error) {
 	}
 	if len(out) == 0 {
 		if last == nil {
-			last = fmt.Errorf("VK catalog contains no readable videos")
+			last = fmt.Errorf("video catalogs contain no readable videos")
 		}
 		return nil, last
 	}
@@ -335,7 +353,46 @@ func ParseGames(page string, loc *time.Location) ([]Game, error) {
 	return out, nil
 }
 
-var videoURLRE = regexp.MustCompile(`^https://vkvideo\.ru/(?:video|live)-71330880_\d+$`)
+var videoURLRE = regexp.MustCompile(`^https://(?:vkvideo\.ru/(?:video|live)-71330880_\d+|rutube\.ru/video/[a-f0-9]{32}/)$`)
+
+// ParseRutubeVideos читает только публичные видео канала ЛХЛ-77.
+func ParseRutubeVideos(page string) ([]Video, bool, error) {
+	var catalog struct {
+		HasNext bool `json:"has_next"`
+		Results []struct {
+			Title     string `json:"title"`
+			URL       string `json:"video_url"`
+			Published string `json:"publication_ts"`
+			Created   string `json:"created_ts"`
+			Deleted   bool   `json:"is_deleted"`
+			Hidden    bool   `json:"is_hidden"`
+			Author    struct {
+				ID int `json:"id"`
+			} `json:"author"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(page), &catalog); err != nil {
+		return nil, false, fmt.Errorf("invalid Rutube catalog: %w", err)
+	}
+	var videos []Video
+	for _, item := range catalog.Results {
+		if item.Author.ID != 35268475 || item.Deleted || item.Hidden || !strings.HasPrefix(item.URL, "https://rutube.ru/video/") || !videoURLRE.MatchString(item.URL) {
+			continue
+		}
+		published := item.Published
+		if published == "" {
+			published = item.Created
+		}
+		if len(published) < 10 {
+			continue
+		}
+		day, err := time.Parse("2006-01-02", published[:10])
+		if err == nil {
+			videos = append(videos, Video{Title: item.Title, URL: item.URL, Date: day})
+		}
+	}
+	return videos, catalog.HasNext, nil
+}
 
 func ParseVideos(page string) ([]Video, error) {
 	doc, err := html.Parse(strings.NewReader(page))
@@ -429,6 +486,16 @@ func FindVideo(g Game, videos []Video) string {
 		} else if distance == best {
 			urls[v.URL] = true
 		}
+	}
+	// Зеркала одного матча на разных платформах не создают неоднозначность.
+	rutube := map[string]bool{}
+	for url := range urls {
+		if strings.HasPrefix(url, "https://rutube.ru/video/") {
+			rutube[url] = true
+		}
+	}
+	if len(rutube) > 0 {
+		urls = rutube
 	}
 	if len(urls) == 1 {
 		for u := range urls {
